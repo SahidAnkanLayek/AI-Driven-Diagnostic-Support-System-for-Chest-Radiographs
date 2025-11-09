@@ -11,27 +11,7 @@ interface DiagnosisUploadProps {
   onDiagnosisComplete: (diagnosis: any) => void;
 }
 
-// Mock AI prediction function (replace with actual AI model later)
-const mockAIPrediction = () => {
-  const diseases = [
-    { name: "Pneumonia", probability: Math.random() * 0.4 + 0.1 },
-    { name: "Lung Nodule", probability: Math.random() * 0.3 },
-    { name: "Cardiomegaly", probability: Math.random() * 0.25 },
-    { name: "Pleural Effusion", probability: Math.random() * 0.2 },
-    { name: "Atelectasis", probability: Math.random() * 0.15 },
-  ];
-
-  const sorted = diseases.sort((a, b) => b.probability - a.probability);
-  const topPrediction = sorted[0];
-  const hasCancer = topPrediction.probability > 0.25;
-
-  return {
-    predictions: sorted.slice(0, 3),
-    topPrediction: topPrediction.name,
-    confidenceScore: (topPrediction.probability * 100).toFixed(2),
-    hasCancer,
-  };
-};
+const BACKEND_API_URL = "http://localhost:8000/api";
 
 const DiagnosisUpload = ({ patientInfoId, onDiagnosisComplete }: DiagnosisUploadProps) => {
   const [uploading, setUploading] = useState(false);
@@ -109,43 +89,63 @@ const DiagnosisUpload = ({ patientInfoId, onDiagnosisComplete }: DiagnosisUpload
     setUploading(false);
     setAnalyzing(true);
 
-    // Simulate AI analysis
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    try {
+      // Call backend API for AI analysis
+      const formData = new FormData();
+      formData.append("file", selectedFile);
 
-    const aiResult = mockAIPrediction();
+      const response = await fetch(`${BACKEND_API_URL}/predict`, {
+        method: "POST",
+        body: formData,
+      });
 
-    // Save diagnosis
-    const { data: diagnosisData, error: diagnosisError } = await supabase
-      .from("diagnoses")
-      .insert({
-        user_id: user.id,
-        patient_info_id: patientInfoId,
-        image_url: publicUrl,
-        predictions: aiResult.predictions,
-        top_prediction: aiResult.topPrediction,
-        confidence_score: parseFloat(aiResult.confidenceScore),
-        has_cancer: aiResult.hasCancer,
-      })
-      .select()
-      .single();
+      if (!response.ok) {
+        throw new Error("AI analysis failed");
+      }
 
-    setAnalyzing(false);
+      const aiResult = await response.json();
 
-    if (diagnosisError) {
+      // Save diagnosis
+      const { data: diagnosisData, error: diagnosisError } = await supabase
+        .from("diagnoses")
+        .insert({
+          user_id: user.id,
+          patient_info_id: patientInfoId,
+          image_url: publicUrl,
+          predictions: aiResult,
+          top_prediction: aiResult.top_label,
+          confidence_score: aiResult.top_score,
+          heatmap_base64: aiResult.heatmap_png_base64,
+          pdf_base64: aiResult.pdf_base64,
+        })
+        .select()
+        .single();
+
+      setAnalyzing(false);
+
+      if (diagnosisError) {
+        toast({
+          title: "Error saving diagnosis",
+          description: diagnosisError.message,
+          variant: "destructive",
+        });
+        return;
+      }
+
       toast({
-        title: "Error saving diagnosis",
-        description: diagnosisError.message,
+        title: "Analysis complete",
+        description: "Chest X-ray analyzed successfully",
+      });
+
+      onDiagnosisComplete(diagnosisData);
+    } catch (error) {
+      setAnalyzing(false);
+      toast({
+        title: "Analysis failed",
+        description: error instanceof Error ? error.message : "Failed to analyze X-ray",
         variant: "destructive",
       });
-      return;
     }
-
-    toast({
-      title: "Analysis complete",
-      description: "Chest X-ray analyzed successfully",
-    });
-
-    onDiagnosisComplete(diagnosisData);
   };
 
   return (
